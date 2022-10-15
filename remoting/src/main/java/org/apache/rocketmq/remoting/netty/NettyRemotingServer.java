@@ -452,10 +452,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) {
 
-            // mark the current position so that we can peek the first byte to determine if the content is starting with
-            // TLS handshake
-            msg.markReaderIndex();
-
+            // Peek the first byte to determine if the content is starting with TLS handshake
             byte b = msg.getByte(0);
 
             if (b == HANDSHAKE_MAGIC_CODE) {
@@ -486,9 +483,6 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 log.warn("Clients intend to establish an insecure connection while this server is running in SSL enforcing mode");
             }
 
-            // reset the reader index so that handshake negotiation may proceed as normal.
-            msg.resetReaderIndex();
-
             try {
                 // Remove this handler
                 ctx.pipeline().remove(this);
@@ -514,6 +508,23 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             }
             // The related remoting server has been shutdown, so close the connected channel
             RemotingUtil.closeChannel(ctx.channel());
+        }
+
+        @Override
+        public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+            Channel channel = ctx.channel();
+            if (channel.isWritable()) {
+                if (!channel.config().isAutoRead()) {
+                    channel.config().setAutoRead(true);
+                    log.info("Channel[{}] turns writable, bytes to buffer before changing channel to un-writable: {}",
+                        RemotingHelper.parseChannelRemoteAddr(channel), channel.bytesBeforeUnwritable());
+                }
+            } else {
+                channel.config().setAutoRead(false);
+                log.warn("Channel[{}] auto-read is disabled, bytes to drain before it turns writable: {}",
+                    RemotingHelper.parseChannelRemoteAddr(channel), channel.bytesBeforeWritable());
+            }
+            super.channelWritabilityChanged(ctx);
         }
     }
 

@@ -19,17 +19,16 @@ package org.apache.rocketmq.store;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.Optional;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.rocketmq.common.SystemClock;
 import org.apache.rocketmq.common.TopicConfig;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageExtBatch;
 import org.apache.rocketmq.common.message.MessageExtBrokerInner;
-import org.apache.rocketmq.common.protocol.body.HARuntimeInfo;
+import org.apache.rocketmq.remoting.protocol.body.HARuntimeInfo;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.ha.HAService;
 import org.apache.rocketmq.store.hook.PutMessageHook;
@@ -827,4 +826,15 @@ public interface MessageStore {
      */
     boolean isShutdown();
 
+    /**
+     * Estimate number of messages, within [from, to], which match given filter
+     *
+     * @param topic   Topic name
+     * @param queueId Queue ID
+     * @param from    Lower boundary of the range, inclusive.
+     * @param to      Upper boundary of the range, inclusive.
+     * @param filter  The message filter.
+     * @return Estimate number of messages matching given filter.
+     */
+    long estimateMessageCount(String topic, int queueId, long from, long to, MessageFilter filter);
 }

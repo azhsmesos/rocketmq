@@ -18,36 +18,35 @@ package org.apache.rocketmq.store.logfile;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
-
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileChannel.MapMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileChannel.MapMode;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.constant.LoggerName;
-import org.apache.rocketmq.common.message.MessageExtBatch;
-import org.apache.rocketmq.logging.InternalLogger;
-import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.message.MessageExt;
+import org.apache.rocketmq.common.message.MessageExtBatch;
+import org.apache.rocketmq.common.message.MessageExtBrokerInner;
+import org.apache.rocketmq.common.utils.NetworkUtil;
+import org.apache.rocketmq.logging.org.slf4j.Logger;
+import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.store.AppendMessageCallback;
 import org.apache.rocketmq.store.AppendMessageResult;
 import org.apache.rocketmq.store.AppendMessageStatus;
 import org.apache.rocketmq.store.CompactionAppendMsgCallback;
-import org.apache.rocketmq.common.message.MessageExtBrokerInner;
 import org.apache.rocketmq.store.PutMessageContext;
 import org.apache.rocketmq.store.SelectMappedBufferResult;
 import org.apache.rocketmq.store.TransientStorePool;
@@ -57,7 +56,7 @@ import sun.nio.ch.DirectBuffer;
 
 public class DefaultMappedFile extends AbstractMappedFile {
     public static final int OS_PAGE_SIZE = 1024 * 4;
-    protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
+    protected static final Logger log = LoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
     protected static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);
 
@@ -723,16 +722,27 @@ public class DefaultMappedFile extends AbstractMappedFile {
         if (!fileName.endsWith(".delete")) {
             String newFileName = this.fileName + ".delete";
             try {
-                Files.move(Paths.get(fileName), Paths.get(newFileName), StandardCopyOption.ATOMIC_MOVE);
+                Path newFilePath = Paths.get(newFileName);
+                // https://bugs.openjdk.org/browse/JDK-4724038
+                // https://bugs.java.com/bugdatabase/view_bug.do?bug_id=4715154
+                // Windows can't move the file when mmapped.
+                if (NetworkUtil.isWindowsPlatform() && mappedByteBuffer != null) {
+                    long position = this.fileChannel.position();
+                    UtilAll.cleanBuffer(this.mappedByteBuffer);
+                    this.fileChannel.close();
+                    Files.move(Paths.get(fileName), newFilePath, StandardCopyOption.ATOMIC_MOVE);
+                    try (RandomAccessFile file = new RandomAccessFile(newFileName, "rw")) {
+                        this.fileChannel = file.getChannel();
+                        this.fileChannel.position(position);
+                        this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
+                    }
+                } else {
+                    Files.move(Paths.get(fileName), newFilePath, StandardCopyOption.ATOMIC_MOVE);
+                }
                 this.fileName = newFileName;
                 this.file = new File(newFileName);
             } catch (IOException e) {
-                log.warn("atomic move file {} failed", fileName, e);
-                try {
-                    Files.move(Paths.get(fileName), Paths.get(newFileName), StandardCopyOption.REPLACE_EXISTING);
-                } catch (IOException e1) {
-                    log.error("move file {} failed", fileName, e1);
-                }
+                log.error("move file {} failed", fileName, e);
             }
         }
     }
@@ -742,7 +752,22 @@ public class DefaultMappedFile extends AbstractMappedFile {
         Path currentPath = Paths.get(fileName);
         String baseName = currentPath.getFileName().toString();
         Path parentPath = currentPath.getParent().getParent().resolve(baseName);
-        Files.move(currentPath, parentPath, StandardCopyOption.ATOMIC_MOVE);
+        // https://bugs.openjdk.org/browse/JDK-4724038
+        // https://bugs.java.com/bugdatabase/view_bug.do?bug_id=4715154
+        // Windows can't move the file when mmapped.
+        if (NetworkUtil.isWindowsPlatform() && mappedByteBuffer != null) {
+            long position = this.fileChannel.position();
+            UtilAll.cleanBuffer(this.mappedByteBuffer);
+            this.fileChannel.close();
+            Files.move(Paths.get(fileName), parentPath, StandardCopyOption.ATOMIC_MOVE);
+            try (RandomAccessFile file = new RandomAccessFile(parentPath.toFile(), "rw")) {
+                this.fileChannel = file.getChannel();
+                this.fileChannel.position(position);
+                this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
+            }
+        } else {
+            Files.move(Paths.get(fileName), parentPath, StandardCopyOption.ATOMIC_MOVE);
+        }
         this.file = parentPath.toFile();
         this.fileName = parentPath.toString();
     }

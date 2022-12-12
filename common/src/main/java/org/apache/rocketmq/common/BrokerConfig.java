@@ -16,17 +16,14 @@
  */
 package org.apache.rocketmq.common;
 
+import java.util.concurrent.TimeUnit;
 import org.apache.rocketmq.common.annotation.ImportantField;
-import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.constant.PermName;
 import org.apache.rocketmq.common.message.MessageRequestMode;
 import org.apache.rocketmq.common.topic.TopicValidator;
-import org.apache.rocketmq.logging.InternalLogger;
-import org.apache.rocketmq.logging.InternalLoggerFactory;
-import org.apache.rocketmq.remoting.common.RemotingUtil;
+import org.apache.rocketmq.common.utils.NetworkUtil;
 
 public class BrokerConfig extends BrokerIdentity {
-    private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.COMMON_LOGGER_NAME);
 
     private String brokerConfigPath = null;
 
@@ -41,8 +38,8 @@ public class BrokerConfig extends BrokerIdentity {
     private int listenPort = 6888;
 
     @ImportantField
-    private String brokerIP1 = RemotingUtil.getLocalAddress();
-    private String brokerIP2 = RemotingUtil.getLocalAddress();
+    private String brokerIP1 = NetworkUtil.getLocalAddress();
+    private String brokerIP2 = NetworkUtil.getLocalAddress();
 
     @ImportantField
     private boolean recoverConcurrently = false;
@@ -216,12 +213,15 @@ public class BrokerConfig extends BrokerIdentity {
     private long reviveInterval = 1000;
     private long reviveMaxSlow = 3;
     private long reviveScanTime = 10000;
+    private boolean enableSkipLongAwaitingAck = false;
+    private long reviveAckWaitMs = TimeUnit.MINUTES.toMillis(3);
     private boolean enablePopLog = false;
     private boolean enablePopBufferMerge = false;
     private int popCkStayBufferTime = 10 * 1000;
     private int popCkStayBufferTimeOut = 3 * 1000;
     private int popCkMaxBufferSize = 200000;
     private int popCkOffsetMaxQueueSize = 20000;
+    private boolean enableNotifyAfterPopOrderLockRelease = true;
 
     private boolean realTimeNotifyConsumerChange = true;
 
@@ -264,6 +264,13 @@ public class BrokerConfig extends BrokerIdentity {
      */
     @ImportantField
     private long transactionCheckInterval = 60 * 1000;
+
+    /**
+     * transaction batch op message
+     */
+    private int transactionOpMsgMaxSize = 4096;
+
+    private int transactionOpBatchInterval = 3000;
 
     /**
      * Acl feature switch
@@ -325,11 +332,19 @@ public class BrokerConfig extends BrokerIdentity {
 
     private long syncControllerMetadataPeriod = 10 * 1000;
 
+    private boolean validateSystemTopicWhenUpdateTopic = true;
+
+    /**
+     * It is an important basis for the controller to choose the broker master.
+     * The lower the value of brokerElectionPriority, the higher the priority of the broker being selected as the master.
+     * You can set a lower priority for the broker with better machine conditions.
+     */
+    private int brokerElectionPriority = Integer.MAX_VALUE;
+
     public enum MetricsExporterType {
         DISABLE(0),
         OTLP_GRPC(1),
-        OTLP_GRPC_SLS(2),
-        PROM(3);
+        PROM(2);
 
         private final int value;
 
@@ -346,8 +361,6 @@ public class BrokerConfig extends BrokerIdentity {
                 case 1:
                     return OTLP_GRPC;
                 case 2:
-                    return OTLP_GRPC_SLS;
-                case 3:
                     return PROM;
                 default:
                     return DISABLE;
@@ -361,23 +374,26 @@ public class BrokerConfig extends BrokerIdentity {
 
     private MetricsExporterType metricsExporterType = MetricsExporterType.DISABLE;
 
-    private String metricsGrpcCollectorEndpoint = "";
-
-    private String metricsSlsProjectName = "";
-    private String metricsSlsInstanceName = "";
-    private String metricsSlsAccessKey = "";
-    private String metricsSlsSecretKey = "";
-
+    private String metricsGrpcExporterTarget = "";
+    private String metricsGrpcExporterHeader = "";
     private long metricGrpcExporterTimeOutInMills = 3 * 1000;
     private long metricGrpcExporterIntervalInMills = 60 * 1000;
 
-    private int metricsPromExporterPort = 8080;
+    private int metricsPromExporterPort = 5557;
     private String metricsPromExporterHost = "";
 
     // Label pairs in CSV. Each label follows pattern of Key:Value. eg: instance_id:xxx,uid:xxx
-    private String brokerMetricsLabel = "";
+    private String metricsLabel = "";
 
-    private boolean brokerMetricsPreferDelta = true;
+    private boolean metricsInDelta = false;
+
+    private long channelExpiredTimeout = 1000 * 120;
+    private long subscriptionExpiredTimeout = 1000 * 60 * 10;
+
+    /**
+     * Estimate accumulation or not when subscription filter type is tag and is not SUB_ALL.
+     */
+    private boolean estimateAccumulation = true;
 
     public long getMaxPopPollingSize() {
         return maxPopPollingSize;
@@ -473,6 +489,22 @@ public class BrokerConfig extends BrokerIdentity {
 
     public void setPopCkOffsetMaxQueueSize(int popCkOffsetMaxQueueSize) {
         this.popCkOffsetMaxQueueSize = popCkOffsetMaxQueueSize;
+    }
+
+    public boolean isEnableSkipLongAwaitingAck() {
+        return enableSkipLongAwaitingAck;
+    }
+
+    public void setEnableSkipLongAwaitingAck(boolean enableSkipLongAwaitingAck) {
+        this.enableSkipLongAwaitingAck = enableSkipLongAwaitingAck;
+    }
+
+    public long getReviveAckWaitMs() {
+        return reviveAckWaitMs;
+    }
+
+    public void setReviveAckWaitMs(long reviveAckWaitMs) {
+        this.reviveAckWaitMs = reviveAckWaitMs;
     }
 
     public boolean isEnablePopLog() {
@@ -1235,6 +1267,14 @@ public class BrokerConfig extends BrokerIdentity {
         this.enableNetWorkFlowControl = enableNetWorkFlowControl;
     }
 
+    public boolean isEnableNotifyAfterPopOrderLockRelease() {
+        return enableNotifyAfterPopOrderLockRelease;
+    }
+
+    public void setEnableNotifyAfterPopOrderLockRelease(boolean enableNotifyAfterPopOrderLockRelease) {
+        this.enableNotifyAfterPopOrderLockRelease = enableNotifyAfterPopOrderLockRelease;
+    }
+
     public boolean isRealTimeNotifyConsumerChange() {
         return realTimeNotifyConsumerChange;
     }
@@ -1395,6 +1435,14 @@ public class BrokerConfig extends BrokerIdentity {
         this.syncControllerMetadataPeriod = syncControllerMetadataPeriod;
     }
 
+    public int getBrokerElectionPriority() {
+        return brokerElectionPriority;
+    }
+
+    public void setBrokerElectionPriority(int brokerElectionPriority) {
+        this.brokerElectionPriority = brokerElectionPriority;
+    }
+
     public boolean isRecoverConcurrently() {
         return recoverConcurrently;
     }
@@ -1467,44 +1515,20 @@ public class BrokerConfig extends BrokerIdentity {
         this.metricsExporterType = MetricsExporterType.valueOf(metricsExporterType);
     }
 
-    public String getMetricsGrpcCollectorEndpoint() {
-        return metricsGrpcCollectorEndpoint;
+    public String getMetricsGrpcExporterTarget() {
+        return metricsGrpcExporterTarget;
     }
 
-    public void setMetricsGrpcCollectorEndpoint(String metricsGrpcCollectorEndpoint) {
-        this.metricsGrpcCollectorEndpoint = metricsGrpcCollectorEndpoint;
+    public void setMetricsGrpcExporterTarget(String metricsGrpcExporterTarget) {
+        this.metricsGrpcExporterTarget = metricsGrpcExporterTarget;
     }
 
-    public String getMetricsSlsProjectName() {
-        return metricsSlsProjectName;
+    public String getMetricsGrpcExporterHeader() {
+        return metricsGrpcExporterHeader;
     }
 
-    public void setMetricsSlsProjectName(String metricsSlsProjectName) {
-        this.metricsSlsProjectName = metricsSlsProjectName;
-    }
-
-    public String getMetricsSlsInstanceName() {
-        return metricsSlsInstanceName;
-    }
-
-    public void setMetricsSlsInstanceName(String metricsSlsInstanceName) {
-        this.metricsSlsInstanceName = metricsSlsInstanceName;
-    }
-
-    public String getMetricsSlsAccessKey() {
-        return metricsSlsAccessKey;
-    }
-
-    public void setMetricsSlsAccessKey(String metricsSlsAccessKey) {
-        this.metricsSlsAccessKey = metricsSlsAccessKey;
-    }
-
-    public String getMetricsSlsSecretKey() {
-        return metricsSlsSecretKey;
-    }
-
-    public void setMetricsSlsSecretKey(String metricsSlsSecretKey) {
-        this.metricsSlsSecretKey = metricsSlsSecretKey;
+    public void setMetricsGrpcExporterHeader(String metricsGrpcExporterHeader) {
+        this.metricsGrpcExporterHeader = metricsGrpcExporterHeader;
     }
 
     public long getMetricGrpcExporterTimeOutInMills() {
@@ -1523,20 +1547,20 @@ public class BrokerConfig extends BrokerIdentity {
         this.metricGrpcExporterIntervalInMills = metricGrpcExporterIntervalInMills;
     }
 
-    public String getBrokerMetricsLabel() {
-        return brokerMetricsLabel;
+    public String getMetricsLabel() {
+        return metricsLabel;
     }
 
-    public void setBrokerMetricsLabel(String brokerMetricsLabel) {
-        this.brokerMetricsLabel = brokerMetricsLabel;
+    public void setMetricsLabel(String metricsLabel) {
+        this.metricsLabel = metricsLabel;
     }
 
-    public boolean isBrokerMetricsPreferDelta() {
-        return brokerMetricsPreferDelta;
+    public boolean isMetricsInDelta() {
+        return metricsInDelta;
     }
 
-    public void setBrokerMetricsPreferDelta(boolean brokerMetricsPreferDelta) {
-        this.brokerMetricsPreferDelta = brokerMetricsPreferDelta;
+    public void setMetricsInDelta(boolean metricsInDelta) {
+        this.metricsInDelta = metricsInDelta;
     }
 
     public int getMetricsPromExporterPort() {
@@ -1553,5 +1577,53 @@ public class BrokerConfig extends BrokerIdentity {
 
     public void setMetricsPromExporterHost(String metricsPromExporterHost) {
         this.metricsPromExporterHost = metricsPromExporterHost;
+    }
+
+    public int getTransactionOpMsgMaxSize() {
+        return transactionOpMsgMaxSize;
+    }
+
+    public void setTransactionOpMsgMaxSize(int transactionOpMsgMaxSize) {
+        this.transactionOpMsgMaxSize = transactionOpMsgMaxSize;
+    }
+
+    public int getTransactionOpBatchInterval() {
+        return transactionOpBatchInterval;
+    }
+
+    public void setTransactionOpBatchInterval(int transactionOpBatchInterval) {
+        this.transactionOpBatchInterval = transactionOpBatchInterval;
+    }
+
+    public long getChannelExpiredTimeout() {
+        return channelExpiredTimeout;
+    }
+
+    public void setChannelExpiredTimeout(long channelExpiredTimeout) {
+        this.channelExpiredTimeout = channelExpiredTimeout;
+    }
+
+    public long getSubscriptionExpiredTimeout() {
+        return subscriptionExpiredTimeout;
+    }
+
+    public void setSubscriptionExpiredTimeout(long subscriptionExpiredTimeout) {
+        this.subscriptionExpiredTimeout = subscriptionExpiredTimeout;
+    }
+
+    public boolean isValidateSystemTopicWhenUpdateTopic() {
+        return validateSystemTopicWhenUpdateTopic;
+    }
+
+    public void setValidateSystemTopicWhenUpdateTopic(boolean validateSystemTopicWhenUpdateTopic) {
+        this.validateSystemTopicWhenUpdateTopic = validateSystemTopicWhenUpdateTopic;
+    }
+
+    public boolean isEstimateAccumulation() {
+        return estimateAccumulation;
+    }
+
+    public void setEstimateAccumulation(boolean estimateAccumulation) {
+        this.estimateAccumulation = estimateAccumulation;
     }
 }

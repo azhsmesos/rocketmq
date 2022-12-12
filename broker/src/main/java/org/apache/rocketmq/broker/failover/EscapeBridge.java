@@ -44,8 +44,8 @@ import org.apache.rocketmq.common.message.MessageDecoder;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageExtBrokerInner;
 import org.apache.rocketmq.common.message.MessageQueue;
-import org.apache.rocketmq.logging.InternalLogger;
-import org.apache.rocketmq.logging.InternalLoggerFactory;
+import org.apache.rocketmq.logging.org.slf4j.Logger;
+import org.apache.rocketmq.logging.org.slf4j.LoggerFactory;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 import org.apache.rocketmq.store.GetMessageResult;
 import org.apache.rocketmq.store.MessageStore;
@@ -53,7 +53,7 @@ import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.PutMessageStatus;
 
 public class EscapeBridge {
-    protected static final InternalLogger LOG = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
+    protected static final Logger LOG = LoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private static final long SEND_TIMEOUT = 3000L;
     private static final long DEFAULT_PULL_TIMEOUT_MILLIS = 1000 * 10L;
     private final String innerProducerGroupName;
@@ -263,7 +263,7 @@ public class EscapeBridge {
         }
     }
 
-    public MessageExt getMessage(String topic, long offset, int queueId, String brokerName) {
+    public MessageExt getMessage(String topic, long offset, int queueId, String brokerName, boolean deCompressBody) {
         MessageStore messageStore = brokerController.getMessageStoreByBrokerName(brokerName);
         if (messageStore != null) {
             final GetMessageResult getMessageTmpResult = messageStore.getMessage(innerConsumerGroupName, topic, queueId, offset, 1, null);
@@ -271,7 +271,7 @@ public class EscapeBridge {
                 LOG.warn("getMessageResult is null , innerConsumerGroupName {}, topic {}, offset {}, queueId {}", innerConsumerGroupName, topic, offset, queueId);
                 return null;
             }
-            List<MessageExt> list = decodeMsgList(getMessageTmpResult);
+            List<MessageExt> list = decodeMsgList(getMessageTmpResult, deCompressBody);
             if (list == null || list.isEmpty()) {
                 LOG.warn("Can not get msg , topic {}, offset {}, queueId {}, result is {}", topic, offset, queueId, getMessageTmpResult);
                 return null;
@@ -283,7 +283,7 @@ public class EscapeBridge {
         }
     }
 
-    protected List<MessageExt> decodeMsgList(GetMessageResult getMessageResult) {
+    protected List<MessageExt> decodeMsgList(GetMessageResult getMessageResult, boolean deCompressBody) {
         List<MessageExt> foundList = new ArrayList<>();
         try {
             List<ByteBuffer> messageBufferList = getMessageResult.getMessageBufferList();
@@ -294,7 +294,7 @@ public class EscapeBridge {
                         LOG.error("bb is null {}", getMessageResult);
                         continue;
                     }
-                    MessageExt msgExt = MessageDecoder.decode(bb);
+                    MessageExt msgExt = MessageDecoder.decode(bb, true, deCompressBody);
                     if (msgExt == null) {
                         LOG.error("decode msgExt is null {}", getMessageResult);
                         continue;
